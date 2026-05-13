@@ -59,6 +59,16 @@ function isGatewayCrashedError(error: unknown): boolean {
   return error.message.includes('is not listening');
 }
 
+function withGatewayToken(request: Request, token: string | undefined): Request {
+  if (!token) return request;
+
+  const url = new URL(request.url);
+  if (url.searchParams.has('token')) return request;
+
+  url.searchParams.set('token', token);
+  return new Request(url.toString(), request);
+}
+
 // killGateway is imported from './gateway' (shared with restart handler)
 
 export { Sandbox };
@@ -69,28 +79,20 @@ export { Sandbox };
  */
 function validateRequiredEnv(env: OpenClawEnv): string[] {
   const missing: string[] = [];
-  const isTestMode = env.DEV_MODE === 'true' || env.E2E_TEST_MODE === 'true';
 
   if (!env.MOLTBOT_GATEWAY_TOKEN) {
     missing.push('MOLTBOT_GATEWAY_TOKEN');
   }
 
-  // CF Access vars not required in dev/test mode since auth is skipped
-  if (!isTestMode) {
-    if (!env.CF_ACCESS_TEAM_DOMAIN) {
-      missing.push('CF_ACCESS_TEAM_DOMAIN');
-    }
-
-    if (!env.CF_ACCESS_AUD) {
-      missing.push('CF_ACCESS_AUD');
-    }
-  }
+  // CF Access vars are optional because the Worker also supports gateway-token
+  // auth for hosted Workers where Access is not injected at the edge.
 
   // Check for AI provider configuration (at least one must be set)
   const hasCloudflareGateway = !!(
-    env.CLOUDFLARE_AI_GATEWAY_API_KEY &&
     env.CF_AI_GATEWAY_ACCOUNT_ID &&
-    env.CF_AI_GATEWAY_GATEWAY_ID
+    env.CF_AI_GATEWAY_GATEWAY_ID &&
+    (env.CLOUDFLARE_AI_GATEWAY_API_KEY ||
+      (env.CLOUDFLARE_AI_GATEWAY_AUTH_TOKEN && env.CF_AI_GATEWAY_MODEL))
   );
   const hasLegacyGateway = !!(env.AI_GATEWAY_API_KEY && env.AI_GATEWAY_BASE_URL);
   const hasAnthropicKey = !!env.ANTHROPIC_API_KEY;
@@ -315,15 +317,8 @@ app.all('*', async (c) => {
       console.log('[WS] URL:', url.pathname + redactedSearch);
     }
 
-    // Inject gateway token into WebSocket request if not already present.
-    // CF Access redirects strip query params, so authenticated users lose ?token=.
-    // Since the user already passed CF Access auth, we inject the token server-side.
-    let wsRequest = request;
-    if (c.env.MOLTBOT_GATEWAY_TOKEN && !url.searchParams.has('token')) {
-      const tokenUrl = new URL(url.toString());
-      tokenUrl.searchParams.set('token', c.env.MOLTBOT_GATEWAY_TOKEN);
-      wsRequest = new Request(tokenUrl.toString(), request);
-    }
+    // Inject gateway token into WebSocket requests after Worker auth.
+    let wsRequest = withGatewayToken(request, c.env.MOLTBOT_GATEWAY_TOKEN);
 
     // Get WebSocket connection to the container (with retry on crash)
     let containerResponse: Response;
@@ -477,11 +472,13 @@ app.all('*', async (c) => {
     });
   }
 
-  console.log('[HTTP] Proxying:', url.pathname + url.search);
+  const proxyRequest = withGatewayToken(request, c.env.MOLTBOT_GATEWAY_TOKEN);
+  const redactedSearch = redactSensitiveParams(new URL(proxyRequest.url));
+  console.log('[HTTP] Proxying:', url.pathname + redactedSearch);
 
   let httpResponse: Response;
   try {
-    httpResponse = await sandbox.containerFetch(request, GATEWAY_PORT);
+    httpResponse = await sandbox.containerFetch(proxyRequest, GATEWAY_PORT);
   } catch (err) {
     if (isGatewayCrashedError(err)) {
       console.log('[HTTP] Gateway crashed, attempting restore + restart and retry...');
@@ -493,7 +490,7 @@ app.all('*', async (c) => {
       }
       await ensureGateway(sandbox, c.env);
       try {
-        httpResponse = await sandbox.containerFetch(request, GATEWAY_PORT);
+        httpResponse = await sandbox.containerFetch(proxyRequest, GATEWAY_PORT);
       } catch (retryErr) {
         console.error('[HTTP] Retry after restart also failed:', retryErr);
         if (acceptsHtml) return c.html(loadingPageHtml);

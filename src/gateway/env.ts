@@ -12,6 +12,16 @@ export function buildEnvVars(env: OpenClawEnv): Record<string, string> {
   // Cloudflare AI Gateway configuration (new native provider)
   if (env.CLOUDFLARE_AI_GATEWAY_API_KEY) {
     envVars.CLOUDFLARE_AI_GATEWAY_API_KEY = env.CLOUDFLARE_AI_GATEWAY_API_KEY;
+  } else if (
+    env.CLOUDFLARE_AI_GATEWAY_AUTH_TOKEN &&
+    env.CF_AI_GATEWAY_MODEL?.startsWith('workers-ai/')
+  ) {
+    // OpenClaw requires a resolved provider credential for remote OpenAI-compatible
+    // providers. "custom-local" is a non-secret marker that suppresses Authorization.
+    envVars.CLOUDFLARE_AI_GATEWAY_API_KEY = 'custom-local';
+  }
+  if (env.CLOUDFLARE_AI_GATEWAY_AUTH_TOKEN) {
+    envVars.CLOUDFLARE_AI_GATEWAY_AUTH_TOKEN = env.CLOUDFLARE_AI_GATEWAY_AUTH_TOKEN;
   }
   if (env.CF_AI_GATEWAY_ACCOUNT_ID) {
     envVars.CF_AI_GATEWAY_ACCOUNT_ID = env.CF_AI_GATEWAY_ACCOUNT_ID;

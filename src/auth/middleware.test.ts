@@ -1,9 +1,41 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { isDevMode, isE2ETestMode, extractJWT } from './middleware';
+import { isDevMode, isE2ETestMode, extractJWT, extractGatewayToken } from './middleware';
 import type { OpenClawEnv } from '../types';
 import type { Context } from 'hono';
 import type { AppEnv } from '../types';
 import { createMockEnv } from '../test-utils';
+
+function createMockContext(options: {
+  jwtHeader?: string;
+  authorization?: string;
+  gatewayHeader?: string;
+  cookies?: string;
+  url?: string;
+}): Context<AppEnv> {
+  const headers = new Headers();
+  if (options.jwtHeader) {
+    headers.set('CF-Access-JWT-Assertion', options.jwtHeader);
+  }
+  if (options.authorization) {
+    headers.set('Authorization', options.authorization);
+  }
+  if (options.gatewayHeader) {
+    headers.set('X-OpenClaw-Gateway-Token', options.gatewayHeader);
+  }
+  if (options.cookies) {
+    headers.set('Cookie', options.cookies);
+  }
+
+  return {
+    req: {
+      url: options.url ?? 'https://example.com/',
+      header: (name: string) => headers.get(name),
+      raw: {
+        headers,
+      },
+    },
+  } as unknown as Context<AppEnv>;
+}
 
 describe('isDevMode', () => {
   it('returns true when DEV_MODE is "true"', () => {
@@ -55,26 +87,6 @@ describe('isE2ETestMode', () => {
 });
 
 describe('extractJWT', () => {
-  // Helper to create a mock context
-  function createMockContext(options: { jwtHeader?: string; cookies?: string }): Context<AppEnv> {
-    const headers = new Headers();
-    if (options.jwtHeader) {
-      headers.set('CF-Access-JWT-Assertion', options.jwtHeader);
-    }
-    if (options.cookies) {
-      headers.set('Cookie', options.cookies);
-    }
-
-    return {
-      req: {
-        header: (name: string) => headers.get(name),
-        raw: {
-          headers,
-        },
-      },
-    } as unknown as Context<AppEnv>;
-  }
-
   it('extracts JWT from CF-Access-JWT-Assertion header', () => {
     const jwt = 'header.payload.signature';
     const c = createMockContext({ jwtHeader: jwt });
@@ -122,6 +134,30 @@ describe('extractJWT', () => {
   });
 });
 
+describe('extractGatewayToken', () => {
+  it('extracts gateway token from query string', () => {
+    const c = createMockContext({ url: 'https://example.com/?token=query-token' });
+    expect(extractGatewayToken(c)).toEqual({ token: 'query-token', source: 'query' });
+  });
+
+  it('extracts gateway token from bearer authorization header', () => {
+    const c = createMockContext({ authorization: 'Bearer bearer-token' });
+    expect(extractGatewayToken(c)).toEqual({ token: 'bearer-token', source: 'authorization' });
+  });
+
+  it('extracts gateway token from explicit header', () => {
+    const c = createMockContext({ gatewayHeader: 'header-token' });
+    expect(extractGatewayToken(c)).toEqual({ token: 'header-token', source: 'header' });
+  });
+
+  it('extracts gateway token from session cookie', () => {
+    const c = createMockContext({
+      cookies: 'other=value; openclaw_gateway_auth=cookie-token',
+    });
+    expect(extractGatewayToken(c)).toEqual({ token: 'cookie-token', source: 'cookie' });
+  });
+});
+
 describe('createAccessMiddleware', () => {
   // Import the function dynamically to allow mocking
   let createAccessMiddleware: typeof import('./middleware').createAccessMiddleware;
@@ -136,17 +172,28 @@ describe('createAccessMiddleware', () => {
   function createFullMockContext(options: {
     env?: Partial<OpenClawEnv>;
     jwtHeader?: string;
+    authorization?: string;
+    gatewayHeader?: string;
     cookies?: string;
+    method?: string;
+    url?: string;
   }): {
     c: Context<AppEnv>;
     jsonMock: ReturnType<typeof vi.fn>;
     htmlMock: ReturnType<typeof vi.fn>;
     redirectMock: ReturnType<typeof vi.fn>;
+    headerMock: ReturnType<typeof vi.fn>;
     setMock: ReturnType<typeof vi.fn>;
   } {
     const headers = new Headers();
     if (options.jwtHeader) {
       headers.set('CF-Access-JWT-Assertion', options.jwtHeader);
+    }
+    if (options.authorization) {
+      headers.set('Authorization', options.authorization);
+    }
+    if (options.gatewayHeader) {
+      headers.set('X-OpenClaw-Gateway-Token', options.gatewayHeader);
     }
     if (options.cookies) {
       headers.set('Cookie', options.cookies);
@@ -155,10 +202,13 @@ describe('createAccessMiddleware', () => {
     const jsonMock = vi.fn().mockReturnValue(new Response());
     const htmlMock = vi.fn().mockReturnValue(new Response());
     const redirectMock = vi.fn().mockReturnValue(new Response());
+    const headerMock = vi.fn();
     const setMock = vi.fn();
 
     const c = {
       req: {
+        url: options.url ?? 'https://example.com/',
+        method: options.method ?? 'GET',
         header: (name: string) => headers.get(name),
         raw: { headers },
       },
@@ -166,10 +216,11 @@ describe('createAccessMiddleware', () => {
       json: jsonMock,
       html: htmlMock,
       redirect: redirectMock,
+      header: headerMock,
       set: setMock,
     } as unknown as Context<AppEnv>;
 
-    return { c, jsonMock, htmlMock, redirectMock, setMock };
+    return { c, jsonMock, htmlMock, redirectMock, headerMock, setMock };
   }
 
   it('skips auth and sets dev user when DEV_MODE is true', async () => {
@@ -249,6 +300,79 @@ describe('createAccessMiddleware', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(htmlMock).toHaveBeenCalledWith(expect.stringContaining('Unauthorized'), 401);
+  });
+
+  it('shows gateway token login when HTML auth is missing and gateway token is configured', async () => {
+    const { c, htmlMock } = createFullMockContext({
+      env: {
+        CF_ACCESS_TEAM_DOMAIN: 'team.cloudflareaccess.com',
+        CF_ACCESS_AUD: 'aud123',
+        MOLTBOT_GATEWAY_TOKEN: 'gateway-secret',
+      },
+    });
+    const middleware = createAccessMiddleware({ type: 'html' });
+    const next = vi.fn();
+
+    await middleware(c, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(htmlMock).toHaveBeenCalledWith(expect.stringContaining('Gateway token'), 401);
+  });
+
+  it('authenticates with gateway token from bearer header', async () => {
+    const { c, setMock, headerMock } = createFullMockContext({
+      env: { MOLTBOT_GATEWAY_TOKEN: 'gateway-secret' },
+      authorization: 'Bearer gateway-secret',
+    });
+    const middleware = createAccessMiddleware({ type: 'json' });
+    const next = vi.fn();
+
+    await middleware(c, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(setMock).toHaveBeenCalledWith('accessUser', {
+      email: 'gateway-token@openclaw.local',
+      name: 'Gateway Token',
+    });
+    expect(headerMock).toHaveBeenCalledWith(
+      'Set-Cookie',
+      expect.stringContaining('openclaw_gateway_auth=gateway-secret'),
+    );
+  });
+
+  it('sets a session cookie and redirects when gateway token comes from URL', async () => {
+    const { c, redirectMock, headerMock } = createFullMockContext({
+      env: { MOLTBOT_GATEWAY_TOKEN: 'gateway-secret' },
+      url: 'https://example.com/_admin/?token=gateway-secret',
+    });
+    const middleware = createAccessMiddleware({ type: 'html' });
+    const next = vi.fn();
+
+    await middleware(c, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(headerMock).toHaveBeenCalledWith(
+      'Set-Cookie',
+      expect.stringContaining('openclaw_gateway_auth=gateway-secret'),
+    );
+    expect(redirectMock).toHaveBeenCalledWith('/_admin/', 302);
+  });
+
+  it('rejects mismatched gateway token', async () => {
+    const { c, jsonMock } = createFullMockContext({
+      env: { MOLTBOT_GATEWAY_TOKEN: 'gateway-secret' },
+      authorization: 'Bearer wrong-token',
+    });
+    const middleware = createAccessMiddleware({ type: 'json' });
+    const next = vi.fn();
+
+    await middleware(c, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(jsonMock).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'Cloudflare Access not configured' }),
+      500,
+    );
   });
 
   it('redirects when JWT is missing and redirectOnMissing is true', async () => {

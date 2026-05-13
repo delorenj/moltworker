@@ -34,6 +34,16 @@ describe('buildEnvVars', () => {
     expect(result.CF_AI_GATEWAY_GATEWAY_ID).toBe('my-gateway-id');
   });
 
+  it('passes Cloudflare AI Gateway auth token', () => {
+    const env = createMockEnv({
+      CLOUDFLARE_AI_GATEWAY_AUTH_TOKEN: 'cf-aig-token',
+      CF_AI_GATEWAY_MODEL: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+    });
+    const result = buildEnvVars(env);
+    expect(result.CLOUDFLARE_AI_GATEWAY_AUTH_TOKEN).toBe('cf-aig-token');
+    expect(result.CLOUDFLARE_AI_GATEWAY_API_KEY).toBe('custom-local');
+  });
+
   it('passes Cloudflare AI Gateway alongside direct Anthropic key', () => {
     const env = createMockEnv({
       CLOUDFLARE_AI_GATEWAY_API_KEY: 'cf-gw-key',

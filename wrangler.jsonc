@@ -83,6 +83,7 @@
   // - OPENAI_API_KEY: Direct OpenAI API key
   // - Cloudflare AI Gateway (alternative to direct keys):
   //   - CLOUDFLARE_AI_GATEWAY_API_KEY: API key for requests through the gateway
+  //   - CLOUDFLARE_AI_GATEWAY_AUTH_TOKEN: Authenticated Gateway token (cf-aig-authorization)
   //   - CF_AI_GATEWAY_ACCOUNT_ID: Your Cloudflare account ID
   //   - CF_AI_GATEWAY_GATEWAY_ID: Your AI Gateway ID
   // - Legacy AI Gateway (still supported):

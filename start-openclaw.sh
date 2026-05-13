@@ -37,7 +37,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
     # so we only pass --auth-choice, never the key itself, to avoid
     # exposing secrets in process arguments visible via ps/proc.
     AUTH_ARGS=""
-    if [ -n "$CLOUDFLARE_AI_GATEWAY_API_KEY" ] && [ -n "$CF_AI_GATEWAY_ACCOUNT_ID" ] && [ -n "$CF_AI_GATEWAY_GATEWAY_ID" ]; then
+    if [ -n "$CLOUDFLARE_AI_GATEWAY_AUTH_TOKEN" ] && [ "$CLOUDFLARE_AI_GATEWAY_API_KEY" = "custom-local" ]; then
+        AUTH_ARGS="--auth-choice skip"
+    elif [ -n "$CLOUDFLARE_AI_GATEWAY_API_KEY" ] && [ -n "$CF_AI_GATEWAY_ACCOUNT_ID" ] && [ -n "$CF_AI_GATEWAY_GATEWAY_ID" ]; then
         AUTH_ARGS="--auth-choice cloudflare-ai-gateway-api-key --cloudflare-ai-gateway-account-id $CF_AI_GATEWAY_ACCOUNT_ID --cloudflare-ai-gateway-gateway-id $CF_AI_GATEWAY_GATEWAY_ID"
     elif [ -n "$ANTHROPIC_API_KEY" ]; then
         AUTH_ARGS="--auth-choice apiKey"
@@ -129,7 +131,10 @@ if (process.env.CF_AI_GATEWAY_MODEL) {
 
     const accountId = process.env.CF_AI_GATEWAY_ACCOUNT_ID;
     const gatewayId = process.env.CF_AI_GATEWAY_GATEWAY_ID;
-    const apiKey = process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
+    const apiKeyRaw = process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
+    const apiKey = apiKeyRaw && apiKeyRaw !== 'custom-local' ? apiKeyRaw : undefined;
+    const apiKeyMarker = apiKeyRaw === 'custom-local' ? 'CLOUDFLARE_AI_GATEWAY_API_KEY' : undefined;
+    const gatewayAuthToken = process.env.CLOUDFLARE_AI_GATEWAY_AUTH_TOKEN;
 
     let baseUrl;
     if (accountId && gatewayId) {
@@ -139,18 +144,25 @@ if (process.env.CF_AI_GATEWAY_MODEL) {
         baseUrl = 'https://api.cloudflare.com/client/v4/accounts/' + process.env.CF_ACCOUNT_ID + '/ai/v1';
     }
 
-    if (baseUrl && apiKey) {
+    if (baseUrl && (apiKey || apiKeyMarker || gatewayAuthToken)) {
         const api = gwProvider === 'anthropic' ? 'anthropic-messages' : 'openai-completions';
         const providerName = 'cf-ai-gw-' + gwProvider;
-
-        config.models = config.models || {};
-        config.models.providers = config.models.providers || {};
-        config.models.providers[providerName] = {
+        const providerConfig = {
             baseUrl: baseUrl,
-            apiKey: apiKey,
             api: api,
             models: [{ id: modelId, name: modelId, contextWindow: 131072, maxTokens: 8192 }],
         };
+        if (apiKey) providerConfig.apiKey = apiKey;
+        if (apiKeyMarker) providerConfig.apiKey = apiKeyMarker;
+        if (gatewayAuthToken) {
+            providerConfig.headers = {
+                'cf-aig-authorization': 'Bearer ' + gatewayAuthToken,
+            };
+        }
+
+        config.models = config.models || {};
+        config.models.providers = config.models.providers || {};
+        config.models.providers[providerName] = providerConfig;
         config.agents = config.agents || {};
         config.agents.defaults = config.agents.defaults || {};
         config.agents.defaults.model = { primary: providerName + '/' + modelId };
