@@ -17,6 +17,14 @@ import { shouldWakeContainer, DEFAULT_LEAD_TIME_MS, CRON_STORE_R2_KEY } from './
  * Configure the check interval in wrangler.jsonc triggers.crons (default: every 1 minute).
  */
 export async function handleScheduled(env: OpenClawEnv): Promise<void> {
+  if (env.TAILSCALE_AUTHKEY) {
+    console.log('[CRON] Tailscale configured, ensuring gateway is awake');
+    const sandbox = getSandbox(env.Sandbox, 'openclaw', buildSandboxOptions(env));
+    await ensureGateway(sandbox, env);
+    console.log('[CRON] Tailscale gateway wake completed');
+    return;
+  }
+
   const cronStoreObject = await env.BACKUP_BUCKET.get(CRON_STORE_R2_KEY);
   if (!cronStoreObject) {
     console.log('[CRON] No cron store found in R2, skipping');

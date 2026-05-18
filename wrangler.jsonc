@@ -39,6 +39,12 @@
       "image": "./Dockerfile",
       "instance_type": "standard-1",
       "max_instances": 1,
+      "authorized_keys": [
+        {
+          "name": "delorenj-big-chungus",
+          "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK+5ttwX817rc4SwdI80OfT1PCr76XYckqE2mAVgoexv delorenj@big-chungus",
+        },
+      ],
     },
   ],
   "durable_objects": {
@@ -92,6 +98,8 @@
   //
   // Authentication:
   // - MOLTBOT_GATEWAY_TOKEN: Token to protect gateway access
+  // - TAILSCALE_AUTHKEY: Tailscale auth key for private tailnet gateway access
+  // - TAILSCALE_HOSTNAME: Optional tailnet hostname for the container
   // - CF_ACCESS_TEAM_DOMAIN: Cloudflare Access team domain
   // - CF_ACCESS_AUD: Cloudflare Access application audience
   //

@@ -111,6 +111,20 @@ describe('buildEnvVars', () => {
     expect(result.OPENCLAW_GATEWAY_TOKEN).toBe('my-token');
   });
 
+  it('passes Tailscale configuration to container', () => {
+    const env = createMockEnv({
+      TAILSCALE_AUTHKEY: 'tskey-auth-test',
+      TAILSCALE_HOSTNAME: 'openclaw-dami',
+      TAILSCALE_STATE_DIR: '/home/openclaw/tailscale',
+      TAILSCALE_SERVE_TARGET: 'http://127.0.0.1:18789',
+    });
+    const result = buildEnvVars(env);
+    expect(result.TAILSCALE_AUTHKEY).toBe('tskey-auth-test');
+    expect(result.TAILSCALE_HOSTNAME).toBe('openclaw-dami');
+    expect(result.TAILSCALE_STATE_DIR).toBe('/home/openclaw/tailscale');
+    expect(result.TAILSCALE_SERVE_TARGET).toBe('http://127.0.0.1:18789');
+  });
+
   // Channel tokens
   it('includes all channel tokens when set', () => {
     const env = createMockEnv({

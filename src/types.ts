@@ -21,6 +21,10 @@ export interface OpenClawEnv {
   ANTHROPIC_BASE_URL?: string;
   OPENAI_API_KEY?: string;
   MOLTBOT_GATEWAY_TOKEN?: string; // Gateway token (mapped to OPENCLAW_GATEWAY_TOKEN for container)
+  TAILSCALE_AUTHKEY?: string; // Tailscale auth key for joining the gateway container to a tailnet
+  TAILSCALE_HOSTNAME?: string; // Optional tailnet device name for the gateway container
+  TAILSCALE_STATE_DIR?: string; // Optional tailscaled state directory inside the container
+  TAILSCALE_SERVE_TARGET?: string; // Optional Tailscale Serve target (default: http://127.0.0.1:18789)
   DEV_MODE?: string; // Set to 'true' for local dev (skips CF Access auth + openclaw device pairing)
   E2E_TEST_MODE?: string; // Set to 'true' for E2E tests (skips CF Access auth but keeps device pairing)
   DEBUG_ROUTES?: string; // Set to 'true' to enable /debug/* routes

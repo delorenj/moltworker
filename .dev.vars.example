@@ -29,6 +29,12 @@ ANTHROPIC_API_KEY=sk-ant-...
 # Optional - set a fixed token instead of auto-generated
 MOLTBOT_GATEWAY_TOKEN=dev-token-change-in-prod
 
+# Optional - join the sandbox container to a Tailscale tailnet and expose
+# the gateway with Tailscale Serve.
+# TAILSCALE_AUTHKEY=tskey-auth-...
+# TAILSCALE_HOSTNAME=openclaw-dev
+# TAILSCALE_SERVE_TARGET=http://127.0.0.1:18789
+
 # Cloudflare Access configuration for /_admin and /api routes
 # Required for admin UI and device pairing API in production
 # CF_ACCESS_TEAM_DOMAIN=myteam.cloudflareaccess.com

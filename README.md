@@ -424,6 +424,8 @@ The previous `AI_GATEWAY_API_KEY` + `AI_GATEWAY_BASE_URL` approach is still supp
 | `CF_ACCESS_TEAM_DOMAIN` | Yes* | Cloudflare Access team domain (required for admin UI) |
 | `CF_ACCESS_AUD` | Yes* | Cloudflare Access application audience (required for admin UI) |
 | `MOLTBOT_GATEWAY_TOKEN` | Yes | Gateway token for authentication (pass via `?token=` query param) |
+| `TAILSCALE_AUTHKEY` | No | Tailscale auth key used to join the sandbox container to a tailnet and expose the gateway with Tailscale Serve |
+| `TAILSCALE_HOSTNAME` | No | Tailnet hostname for the sandbox container (default: `openclaw-dami`) |
 | `DEV_MODE` | No | Set to `true` to skip CF Access auth + device pairing (local dev only) |
 | `DEBUG_ROUTES` | No | Set to `true` to enable `/debug/*` routes |
 | `SANDBOX_SLEEP_AFTER` | No | Container sleep timeout: `never` (default) or duration like `10m`, `1h` |

@@ -11,7 +11,7 @@ RUN ARCH="$(dpkg --print-architecture)" \
          arm64) NODE_ARCH="arm64" ;; \
          *) echo "Unsupported architecture: ${ARCH}" >&2; exit 1 ;; \
        esac \
-    && apt-get update && apt-get install -y xz-utils ca-certificates \
+    && apt-get update && apt-get install -y xz-utils ca-certificates curl \
     && rm -rf /usr/local/lib/node_modules /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
     && curl -fsSLk https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz -o /tmp/node.tar.xz \
     && rm -rf /usr/local/lib/node_modules /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
@@ -19,6 +19,21 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && rm /tmp/node.tar.xz \
     && node --version \
     && npm --version
+
+# Install Tailscale for private tailnet access to the OpenClaw gateway.
+# The container uses tailscaled in userspace-networking mode at runtime.
+RUN . /etc/os-release \
+    && apt-get update \
+    && apt-get install -y ca-certificates curl \
+    && mkdir -p /usr/share/keyrings \
+    && curl -fsSL "https://pkgs.tailscale.com/stable/${ID}/${VERSION_CODENAME}.noarmor.gpg" \
+        -o /usr/share/keyrings/tailscale-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/${ID} ${VERSION_CODENAME} main" \
+        > /etc/apt/sources.list.d/tailscale.list \
+    && apt-get update \
+    && apt-get install -y tailscale \
+    && rm -rf /var/lib/apt/lists/* \
+    && tailscale version
 
 # Install OpenClaw
 # Pin to specific version for reproducible builds
@@ -36,7 +51,7 @@ RUN mkdir -p /home/openclaw/.openclaw \
     && ln -s /home/openclaw/clawd /root/clawd
 
 # Copy startup script
-# Build cache bust: 2026-03-26-v32-home-dir
+# Build cache bust: 2026-05-13-v34-tailscale-rollout
 COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
 RUN chmod +x /usr/local/bin/start-openclaw.sh
 

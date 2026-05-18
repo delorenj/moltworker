@@ -9,12 +9,15 @@
 # Worker level, not inside the container. The Worker calls createBackup()
 # and restoreBackup() which use squashfs snapshots stored in R2.
 # No rclone or R2 credentials are needed inside the container.
+#
+# Rollout marker: 2026-05-14-v7-gateway-token-refresh
 
 set -e
 
+GATEWAY_ALREADY_RUNNING=false
 if pgrep -f "openclaw gateway" > /dev/null 2>&1; then
-    echo "OpenClaw gateway is already running, exiting."
-    exit 0
+    echo "OpenClaw gateway is already running."
+    GATEWAY_ALREADY_RUNNING=true
 fi
 
 CONFIG_DIR="/root/.openclaw"
@@ -25,6 +28,99 @@ SKILLS_DIR="/root/clawd/skills"
 echo "Config directory: $CONFIG_DIR"
 
 mkdir -p "$CONFIG_DIR"
+
+redact_secrets() {
+    sed -E 's/tskey-auth-[A-Za-z0-9_-]+/[REDACTED]/g'
+}
+
+tailscale_is_running() {
+    tailscale --socket="$1" status --json >/tmp/tailscale-status.json 2>/tmp/tailscale-status.err \
+        && node -e "const fs=require('fs'); const s=JSON.parse(fs.readFileSync('/tmp/tailscale-status.json','utf8')); process.exit(s.BackendState === 'Running' ? 0 : 1);"
+}
+
+print_tailscale_endpoint() {
+    tailscale --socket="$1" status --json 2>/dev/null \
+        | node -e "let s=''; process.stdin.on('data', d => s += d); process.stdin.on('end', () => { try { const j=JSON.parse(s); const self=j.Self || {}; const dns=typeof self.DNSName === 'string' ? self.DNSName.replace(/[.]$/, '') : ''; const ips=Array.isArray(self.TailscaleIPs) ? self.TailscaleIPs : []; if (dns) console.log('Tailscale DNS: https://' + dns); else if (ips[0]) console.log('Tailscale IP: http://' + ips[0]); } catch {} });"
+}
+
+start_tailscale_if_configured() {
+    if [ -z "$TAILSCALE_AUTHKEY" ]; then
+        echo "Tailscale: disabled (TAILSCALE_AUTHKEY not set)"
+        return 0
+    fi
+
+    if ! command -v tailscaled >/dev/null 2>&1 || ! command -v tailscale >/dev/null 2>&1; then
+        echo "Tailscale: tailscale binaries are missing; continuing without tailnet access"
+        return 0
+    fi
+
+    local tailscale_socket="${TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock}"
+    local tailscale_state_dir="${TAILSCALE_STATE_DIR:-/home/openclaw/tailscale}"
+    local tailscale_hostname="${TAILSCALE_HOSTNAME:-openclaw-dami}"
+    local tailscale_serve_target="${TAILSCALE_SERVE_TARGET:-http://127.0.0.1:18789}"
+
+    mkdir -p "$(dirname "$tailscale_socket")" "$tailscale_state_dir"
+    chmod 700 "$tailscale_state_dir" 2>/dev/null || true
+
+    if ! tailscale --socket="$tailscale_socket" status --json >/dev/null 2>&1; then
+        echo "Tailscale: starting tailscaled in userspace-networking mode..."
+        rm -f "$tailscale_socket" 2>/dev/null || true
+        tailscaled \
+            --tun=userspace-networking \
+            --socket="$tailscale_socket" \
+            --statedir="$tailscale_state_dir" \
+            --state="$tailscale_state_dir/tailscaled.state" \
+            >/tmp/tailscaled.log 2>&1 &
+
+        for _ in $(seq 1 30); do
+            [ -S "$tailscale_socket" ] && break
+            sleep 0.5
+        done
+    else
+        echo "Tailscale: tailscaled already responding"
+    fi
+
+    if [ ! -S "$tailscale_socket" ]; then
+        echo "Tailscale: socket did not appear; continuing without tailnet access"
+        tail -n 50 /tmp/tailscaled.log 2>/dev/null | redact_secrets || true
+        return 0
+    fi
+
+    if ! tailscale_is_running "$tailscale_socket"; then
+        echo "Tailscale: joining tailnet as ${tailscale_hostname}..."
+        printf '%s' "$TAILSCALE_AUTHKEY" > /tmp/tailscale-authkey
+        chmod 600 /tmp/tailscale-authkey
+        if ! tailscale --socket="$tailscale_socket" up \
+            --auth-key=file:/tmp/tailscale-authkey \
+            --hostname="$tailscale_hostname" \
+            --accept-dns=true \
+            --timeout=45s \
+            >/tmp/tailscale-up.log 2>&1; then
+            echo "Tailscale: join failed; continuing without tailnet access"
+            tail -n 80 /tmp/tailscale-up.log 2>/dev/null | redact_secrets || true
+            rm -f /tmp/tailscale-authkey
+            return 0
+        fi
+        rm -f /tmp/tailscale-authkey
+    else
+        echo "Tailscale: already joined to tailnet"
+    fi
+
+    if tailscale --socket="$tailscale_socket" serve --bg --yes "$tailscale_serve_target" >/tmp/tailscale-serve.log 2>&1; then
+        echo "Tailscale: Serve forwarding to ${tailscale_serve_target}"
+        print_tailscale_endpoint "$tailscale_socket" || true
+    else
+        echo "Tailscale: Serve setup failed; tailnet may be joined but gateway forwarding is unavailable"
+        tail -n 80 /tmp/tailscale-serve.log 2>/dev/null | redact_secrets || true
+    fi
+}
+
+start_tailscale_if_configured
+
+if [ "$GATEWAY_ALREADY_RUNNING" = "true" ]; then
+    echo "OpenClaw gateway is already running, exiting."
+    exit 0
+fi
 
 # ============================================================
 # ONBOARD (only if no config exists yet)
@@ -95,7 +191,15 @@ config.gateway.controlUi.allowedOrigins = ['*'];
 
 if (process.env.OPENCLAW_GATEWAY_TOKEN) {
     config.gateway.auth = config.gateway.auth || {};
+    config.gateway.auth.mode = 'token';
     config.gateway.auth.token = process.env.OPENCLAW_GATEWAY_TOKEN;
+}
+
+if (process.env.TAILSCALE_AUTHKEY) {
+    config.gateway.auth = config.gateway.auth || {};
+    config.gateway.auth.allowTailscale = true;
+    config.gateway.tailscale = config.gateway.tailscale || {};
+    config.gateway.tailscale.mode = 'off';
 }
 
 // Allow any origin to connect to the gateway control UI.
